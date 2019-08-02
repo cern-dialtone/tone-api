@@ -1,6 +1,6 @@
 /**
  * dial-api.js for DIAL-TONE.
- * @version 0.8.0
+ * @version 0.8.7
  *
  * WebRTC API for audio calls through PC for TONE infrastructure.
  * DIAL-TONE (Distributed Infrastructure Architecture Leading to TONE)
@@ -8,17 +8,12 @@
  * universal client for all browsers and operating systems.
  *
  * @author JoÃ£o Filipe Garrett PaixÃ£o FlorÃªncio <joao.florencio@cern.ch>
+ * @adapted Rene Fernandez Sanchez <rene.fernandez@cern.ch>
  */
 import SHA512 from "crypto-js/sha512";
 
 import * as SIP from "sip.js";
 
-// Constants
-
-/**
- * @const {EventEmitter} EventEmitter front-end URI
- */
-import { EventEmitter } from "events";
 
 import * as ReactSDH from "sip.js/lib/React/SessionDescriptionHandler";
 import * as ReactSDObserver from "sip.js/lib/React/SessionDescriptionHandlerObserver";
@@ -28,7 +23,6 @@ const reactFactory = (session, options) => {
     "sip.invitecontext.sessionDescriptionHandler",
     session.id
   );
-  console.log(logger);
   var observer = new ReactSDObserver.SessionDescriptionHandlerObserver(
     session,
     options
@@ -36,7 +30,40 @@ const reactFactory = (session, options) => {
   return new ReactSDH.SessionDescriptionHandler(logger, observer, options);
 };
 
+var initialServerList = [
+  {
+    address : 'tone-0513-wpilot-fe-2.cern.ch',
+    priority: 10,
+  },
+  {
+    address : 'tone-0513-wfe-qa.cern.ch',
+    priority: 9,
+  }
+];
 
+var dynamicServerListURL = 'https://gw-config.web.cern.ch/gw-config/wfe-serverlist/serverList.php';
+var dynamicServerListURLDev = dynamicServerListURL + '?development=true';
+
+var initialServerList = [
+  {
+    address : 'tone-0513-wpilot-fe-2.cern.ch',
+    priority: 10,
+  },
+  {
+    address : 'tone-0513-wfe-qa.cern.ch',
+    priority: 9,
+  }
+];
+
+var dynamicServerListURL = 'https://gw-config.web.cern.ch/gw-config/wfe-serverlist/serverList.php';
+var dynamicServerListURLDev = dynamicServerListURL + '?development=true';
+
+// Constants
+
+/**
+ * @const {EventEmitter} EventEmitter front-end URI
+ */
+const EventEmitter = require('events');
 
 /**
  * Notifier class, extends EventEmitter. Responsible for sending events.
@@ -46,36 +73,45 @@ const reactFactory = (session, options) => {
  */
 export class DialNotifier extends EventEmitter {}
 
-/**
+ /**
  * Main API Class
  * @class
  * @property {!Object} dialNotifier instance of DialNotifier where clients listen for events.
  * @property {!Object} ua UserAgent object attached to a WebRTC connection.
- * @property {!Object} session WebRTC session object attached to a UserAgent.
+ * @property {!Object} sessionList Object with a list of WebRTC sessions objects attached to a UserAgent, mapped by id.
  * @property {!Object} config WebRTC configuration for starting the UserAgent.
  * @property {!Object} handler WebRTC MediaHandler object.
  * @property {boolean} onCall Indicates if the current session is in a call.
  * @property {boolean} inviteReceived Indicates if the there is an active incoming call still unanswered.
+ * @property {string}  tokenHash SHA-512 hash string of the full token passed to the authenticate method.
+ * @property {boolean} devMode Boolean indicating if API is being used in develoment mode, which changes the servers it connects to.
+ * @property {boolean} returningUser Boolean indicating if Dial is instantiated again in a short period to know if it should use the same hashed token.
  */
 export class Dial {
-  constructor() {
+
+  constructor(dev = false, returning = false) {
     console.debug("Dial initialized");
-    this.dialNotifier = new EventEmitter();
+    this.dialNotifier = new DialNotifier();
+
+    this.devMode = dev;
+    this.returningUser = returning;
     this.discoverServer();
 
+    this.sessionList = {};
+
     this.messages = {
-      10: "No network connection.",
-      11: "Cannot connect to TONE infrastructure.",
-      20: "Error with media. No audio.",
-      30: "Incorrect invite received.",
-      40: "Disconnected from TONE server.",
-      50: "Cannot make call. Your are not registered.",
-      51: "Cannot make call. You dont have the rights.",
-      52: "Make call remotely rejected. Called user unkown.",
-      53: "Make call remotely rejected. Called user is busy.",
-      54: "Make call remotely rejected. Called user is not registered.",
-      60: "Register rejected. Unathorized user.",
-      61: "Register rejected. Unkown user."
+      10 : "No network connection.",
+      11 : "Cannot connect to TONE infrastructure.",
+      20 : "Error with media. No audio.",
+      30 : "Incorrect invite received.",
+      40 : "Disconnected from TONE server.",
+      50 : "Cannot make call. Your are not registered.",
+      51 : "Cannot make call. You dont have the rights.",
+      52 : "Make call remotely rejected. Called user unkown.",
+      53 : "Make call remotely rejected. Called user is busy.",
+      54 : "Make call remotely rejected. Called user is not registered.",
+      60 : "Register rejected. Unathorized user.",
+      61 : "Register rejected. Unkown user.",
     };
   }
 
@@ -89,13 +125,15 @@ export class Dial {
   authenticate(user, accessToken) {
     if (user && accessToken) {
       try {
-        this.startAgent(user,accessToken);
+        this.user = user;
+        this.token = accessToken;
         this.tokenHash = SHA512(accessToken).toString();
-        console.log("hashed token:" + this.tokenHash);
+        // console.log("hashed token:" + this.tokenHash);
+        this.startAgent();
         return this.tokenHash;
       }
       catch (e) {
-        console.error("Error authenticate:" + e + "\n");
+         throw Error("Error authenticate:" + e + "\n");
       }
     }
     else throw Error("Cannot authenticate. Token or User not set.");
@@ -106,16 +144,24 @@ export class Dial {
    * Relays the event with the track to the client.
    * Playing the track is client's responsability.
    */
-  addTrackListener() {
-    this.session.on("trackAdded", () => {
+  addTrackListener(session){
+    session.on('trackAdded', function() {
       // We need to check the peer connection to determine which track was added
-      var sdh = this.session.sessionDescriptionHandler;
-      if (sdh === undefined) {
-        throw Error("Session description handler not defined.");
+      var sdh = session.sessionDescriptionHandler;
+      if(sdh == undefined){
+        throw Error('Session description handler not defined.');
       } else {
+        var pc = session.sessionDescriptionHandler.peerConnection;
+        // Gets remote tracks
+        var remoteStream = new MediaStream();
+        pc.getReceivers().forEach(function(receiver) {
+          remoteStream.addTrack(receiver.track);
+        });
         this.onCall = true;
+        var event = Dial.buildEvent('trackAdded', {'remoteStream':remoteStream, 'session': session});
+        this.sendEvent(event);
       }
-    });
+    }.bind(this));
   }
 
   /**
@@ -131,8 +177,36 @@ export class Dial {
     };
     let fullURI = callee + '@' + this.uri;
     let session = this.ua.invite(fullURI,options);
-    this.setSession(session);
+    this.initializeSession(session);
+    return session.id;
     // this.agentLastTrigger = 'inviteSent';
+  }
+
+  /**
+   * Answers a specific incoming call.
+   * Assumes there is a previously received invite, if not returns an error.
+   * @param {!object} session Session object.
+   */
+  answerCall(session) {
+    if(!this.inviteReceived){
+      throw Error("Cannot answer call. No invite received.");
+    }
+    if(!session){
+      throw Error("Cannot answer call. Session not established.");
+    }
+    session.accept();
+    this.onCall = true;
+    var event = Dial.buildEvent('inviteAccepted', {'session':session});
+    this.sendEvent(event);
+  }
+
+  /**
+   * Answers an incoming call.
+   * Assumes there is a previously received invite, if not returns an error.
+   * @param {!string} sessionId Session ID string.
+   */
+  answerCallId(sessionId) {
+    return this.answerCall(this.sessionList[sessionId]);
   }
 
   /**
@@ -140,33 +214,43 @@ export class Dial {
    * Assumes there is a previously received invite, if not returns an error.
    */
   answer() {
-    if(!this.inviteReceived){
-      throw Error("Cannot answer call. No invite received.");
+    return this.answerCall(this.getMostRecentSession());
+  }
+
+  /**
+   * Call finishing by providing session object.
+   * @param {!object} session Session object.
+   */
+  hangUpCall(session) {
+    if (session && session != undefined){
+      if(this.sessionOnCall(session) || this.onCall){
+        session.terminate();
+        delete this.sessionList[session.id];
+      }
+      else if(this.inviteReceived) {
+        session.reject();
+      }
+      else throw Error("Trying to hang up a non valid session.");
     }
-    if(!this.session){
-      throw Error("Cannot answer call. Session not established.");
-    }
-    this.session.accept();
-    this.onCall = true;
-    var event = Dial.buildEvent('inviteAccepted', {'session':this.session});
-    this.sendEvent(event);
+    else throw Error("Trying to hang up a non valid session.");
+  }
+
+  /**
+   * Call finishing by providing session Id.
+   * @param {!string} sessionId Session ID string.
+   */
+  hangUpCallId(sessionId) {
+    return this.hangUpCall(this.sessionList[sessionId]);
   }
 
   /**
    * Call finishing. Flush the current session.
    */
-  hangUp() {
-    if (this.onCall) {
-      this.onCall = false;
-      this.inviteReceived = false;
-      this.session.terminate();
-      this.session = null;
-    }
-    else if(this.inviteReceived){
-      this.session.reject();
-    }
-    else throw Error("Hang up when not on a call and no invite.");
+  hangUp(){
+    return this.hangUpCall(this.getDefaultSession());
   }
+
+
 
   /**
    * Function to send DTMF tones.
@@ -174,7 +258,7 @@ export class Dial {
    */
   sendDTMF(tone){
     if (this.onCall) {
-      this.session.dtmf(tone);
+      this.getDefaultSession.dtmf(tone);
     }
     else throw Error("Trying to send DTMF digits when not on a call.");
   }
@@ -184,123 +268,180 @@ export class Dial {
    * Returns an FQDN of the TONE server to connect to.
    */
   discoverServer() {
-    /*
-      go discover a service! go!
-    */
-    this.uri = 'tone-0513-wpilot-fe-2.cern.ch';
+    this.uri = 'tone-wfe.cern.ch';
+    this.saveServerList(initialServerList);
+    this.saveServerListFromServer();
+  }
+
+  /**
+   * Internal function, to be called to handle server lists and save them in the SIP.JS's UserAgent.
+   */
+  saveServerList(list){
+    var wsList = [];
+    list.forEach(function(server) {
+      var wsServerObj = {
+          wsUri : 'wss://'+ server.address +':8089/ws',
+          weight: server.priority
+      }
+      wsList.push(wsServerObj);
+    });
+    this.serverList = wsList;
+  }
+
+   /**
+   * Tries to read a list of servers from the URL specified in dynamicServerListURL.
+   */
+  saveServerListFromServer(){
+    // read JSON from URL location
+    var url = (this.devMode)? dynamicServerListURLDev : dynamicServerListURL;
+    var request = new XMLHttpRequest();
+    request.open('GET', url, true);
+    request.responseType = 'json';
+    var classInstance = this;
+    request.onload = function(event, caller = classInstance) {
+      var status = request.status;
+      console.log(request.response);
+      if (status === 200) {
+        //tokenHash == undefined means that no authentication process has started while we waited for the server list
+        if(caller.ua == undefined){
+          try {
+            caller.saveServerList(request.response);
+            console.log("Saving list since UA hasnt been created yet.");
+          } catch (e) {
+            throw Error("Error reading JSON from server. Local server list will be used.");
+          }
+        }
+      } else {
+        throw Error("Error loading server list from URL.");
+      }
+    };
+    request.send();
   }
 
   /**
    * Checks if current agent is on a call.
    * Alerting and calling states are considered on-call states.
+   * @returns {boolean} On call value.
    */
-  isOnCall() {
+  isOnCall(){
     return this.onCall;
+  }
+
+   /**
+   * Checks if the given session is on a call.
+   * @param {object} session The session object.
+   */
+  sessionOnCall(session){
+    return session.startTime != null;
   }
 
   /**
    * Checks if current agent received an invite recently and is able to answer a call.
+   * @returns {boolean} True if agent is able to answer a call.
    */
-  isRinging() {
+  isRinging(){
     return this.inviteReceived;
   }
 
   /**
    * UserAgent initialization given SIP credentials and the WebRTC config. In addition,
    * the function initializes the UserAgent event triggers.
-   * @param {string} user Contact SIP username.
-   * @param {!string} password Contact SIP password.
    */
-  startAgent(user, accessToken) {
-    console.log(`Starting agent...`);
+  startAgent() {
     this.config = {
-      uri: user + "@" + this.uri,
-      // allowLegacyNotifications: true,
-      log: {
-        level: "debug",
-        builtinEnabled: true
-      },
+      uri: this.user + '@' + this.uri,
+      allowLegacyNotifications: true,
       transportOptions: {
-        wsServers: [
-          {
-            wsUri: "wss://" + this.uri + ":8089/ws",
-            weight: 10
-          }
-        ],
-        traceSip: true
+        wsServers: this.serverList,
+        traceSip: true,
       },
       sessionDescriptionHandlerFactoryOptions: {
         constraints: {
           audio: true,
           video: false
-        },
-        alwaysAcquireMediaFirst: false
+        }
       },
       sessionDescriptionHandlerFactory: function(session, options) {
-        console.log(session);
-        console.log(options);
         let result = reactFactory(session, options);
-
-        console.log(result);
         return result;
       },
-      contactName: user,
-      authorizationUser: user,
-      password: "",
+      contactName: this.user,
+      authorizationUser: this.user,
+      password: '',
       hackWssInTransport: true,
       register: false,
       autostart: true,
+      log: {
+        level: 'debug'
+      },
       hackIpInContact: false,
-      userAgentString: "sip.js-v0.11.2 IT-CS-TR"
+      userAgentString: 'sip.js-v0.13.8 IT-CS-TR'
     };
-    console.log(this.config);
 
     // @ts-ignore
     this.ua = new SIP.UA(this.config);
-    this.addListeners(accessToken);
+    // this.ua = new SIP_main.UA(this.config);
+    this.addListeners();
   }
 
   /**
    * Adds listener handler behaviour for user-agent events.
    * These are not session events (related to a particular call/session)
-   * @param {!string} accessToken A string with a cern OAuth2.0 token to be used in Register requests.
    */
-  addListeners(accessToken) {
-    this.ua.on("registered", () => {
-      var event = Dial.buildEvent("registered", {});
+  addListeners(){
+    this.ua.on('registered', function () {
+      this.token = undefined;
+      var event = Dial.buildEvent('registered', {});
       this.sendEvent(event);
-    });
-    this.ua.on("unregistered", (response, cause) => {
-      var event = Dial.buildEvent("unregistered", {}, cause, response);
+      if(!this.firstRegister){
+        this.startRegister(this.tokenHash);
+      }
+      this.firstRegister = true;
+    }.bind(this));
+    this.ua.on('unregistered', function (response, cause) {
+      var event = Dial.buildEvent('unregistered',{},cause,response);
       this.sendEvent(event);
-    });
-    this.ua.on("registrationFailed", (cause, response) => {
-      var event = Dial.buildEvent("registrationFailed", {}, cause, response);
+    }.bind(this));
+    this.ua.on('registrationFailed', function (cause, response) {
+      var event = Dial.buildEvent('registrationFailed',{},cause,response);
       this.sendEvent(event);
-    });
-    this.ua.on("invite", session => {
+    }.bind(this));
+    this.ua.on('invite', function (session) {
       this.inviteReceived = true;
-      this.setSession(session);
-      var event = Dial.buildEvent("inviteReceived", { session: session });
+      this.initializeSession(session);
+      var event = Dial.buildEvent('inviteReceived', {'session':session});
       this.sendEvent(event);
-    });
-    this.ua.on("message", message => {
-      var event = Dial.buildEvent("Message received", { message: message });
+    }.bind(this));
+    this.ua.on('message', function (message) {
+      var event = Dial.buildEvent('Message received', {'message':message});
       this.sendEvent(event);
-    });
-    this.ua.transport.on("connected", () => {
-      this.startRegister(accessToken);
-    });
+    }.bind(this));
+    this.ua.transport.on('connected', function () {
+      var tokenVersion = this.token;
+      if(this.returningUser) {
+        this.firstRegister = true;
+        tokenVersion = this.tokenHash;
+      }
+      this.startRegister(tokenVersion);
+    }.bind(this));
+    this.ua.transport.on('transportError',function () {
+      this.serverFailure();
+    }.bind(this));
+  }
+
+  serverFailure(){
+    throw Error("Connection to server " + this.ua.transport.server.wsUri + " failed.");
   }
 
   /**
    * Starts sending the SIP register requests to TONE.
    * Periodic keep-alive register start to be sent until unregistration.
-   * @param {!string} accessToken The access token sent as an custom header ('X-Tone-token').
+   * @param {!string} token The access token sent as an custom header in full or hashed mode ('X-Tone-token'/'X-Tone-hash').
    */
-  startRegister(accessToken){
+  startRegister(token){
+    var headerName = 'X-Tone-token';
     var options = {
-      'extraHeaders': [ 'X-Tone-token:' + accessToken ]
+      'extraHeaders': [ headerName +':' + token ]
     };
     this.ua.register(options);
   }
@@ -308,18 +449,20 @@ export class Dial {
   /**
    * Helper function to create event objects to send out to client
    * @param {!string} name The name of the event.
-   * @param {!object} name Aditional event data.
-   * @param {!errorMsg} name Eventual error message.
+   * @param {!object} data Aditional event data.
+   * @param {number} [errorCode = 0] Eventual numeric error code.
+   * @param {string}  [errorMsg = undefined] Eventual error message.
+   * @returns {event} True if agent is able to answer a call.
    */
-  static buildEvent(name, data, errorCode = 0, errorMsg = undefined) {
-    var event = {
-      name: name,
-      data: data
+  static buildEvent(name, data, errorCode=0, errorMsg=undefined){
+   var event = {
+      'name': name,
+      'data' : data
     };
-    if (errorCode) {
+    if(errorCode){
       var errorObj = {
-        code: errorCode,
-        description: errorMsg
+        'code': errorCode,
+        'description': errorMsg
       };
       event.error = errorObj;
     }
@@ -330,14 +473,14 @@ export class Dial {
    * This functions emits the events sent client.
    * @param {!object} event The event object.
    */
-  sendEvent(event) {
-    this.dialNotifier.emit("ToneEvent", event);
+  sendEvent(event){
+    this.dialNotifier.emit('ToneEvent',event);
   }
 
   /**
    * This functions returns an object in which the client can listen to TONE events.
    */
-  getNotifier() {
+  getNotifier(){
     return this.dialNotifier;
   }
 
@@ -346,134 +489,174 @@ export class Dial {
    */
   stopAgent() {
     this.ua.stop();
+    this.clearAuthInfo();
+  }
+
+  /**
+   * Cleans-up authentication related fields.
+   */
+  clearAuthInfo(){
+    this.token = null;
+    this.tokenHash = null;
+    this.firstRegister = false;
   }
 
   /**
    * Cleans-up call related flags.
    */
-  endCleanup() {
-    this.onCall = false;
-    this.inviteReceived = false;
+  endCleanup(session){
+    this.removeSession(session);
+    if(Object.keys(this.sessionList).length == 0){
+      this.onCall = false;
+      this.inviteReceived = false;
+    }
   }
 
   /**
    * Initializes the Session and sets the session event triggers.
    * @param {!Object} session Current session.
    */
-  setSession(session) {
-    session.on(
-      "progress",
-      () =>  {
-        var event = Dial.buildEvent("progress", {});
+  initializeSession(session) {
+    session.on('progress', function () {
+      var event = Dial.buildEvent('progress', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('accepted', function () {
+      var event = Dial.buildEvent('accepted', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('rejected', function () {
+      this.endCleanup(session);
+      var event = Dial.buildEvent('rejected', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('failed', function () {
+      this.endCleanup(session);
+      var event = Dial.buildEvent('failed', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('cancel', function () {
+      this.endCleanup(session);
+      var event = Dial.buildEvent('cancel', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('bye', function () {
+      this.endCleanup(session);
+      var event = Dial.buildEvent('bye', {'session': session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('terminated', function () {
+      this.endCleanup(session);
+      var event = Dial.buildEvent('terminated', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('reinvite', function () {
+      var event = Dial.buildEvent('reinvite', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('replaced', function () {
+      var event = Dial.buildEvent('replaced', {'session':session});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('dtmf', function(request, dtmf) {
+      var event = Dial.buildEvent('dtmf', {'number': dtmf});
+      this.sendEvent(event);
+    }.bind(this));
+    session.on('SessionDescriptionHandler-created', function () {
+      var event = Dial.buildEvent('SessionDescriptionHandler-created', {'session':session});
+      this.sendEvent(event);
+      // setting up event for failure of user media here
+      // since session description handler only exists from this moment on.
+      session.sessionDescriptionHandler.on('userMediaFailed', function() {
+        this.endCleanup(session);
+        var event = Dial.buildEvent('userMediaFailed', {'session':session});
         this.sendEvent(event);
-      }
-    );
-    session.on(
-      "accepted",
-      () =>  {
-        var event = Dial.buildEvent("accepted", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "rejected",
-      () =>  {
-        this.endCleanup();
-        var event = Dial.buildEvent("rejected", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "failed",
-      () =>  {
-        this.endCleanup();
-        var event = Dial.buildEvent("failed", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "cancel",
-      () =>  {
-        this.endCleanup();
-        var event = Dial.buildEvent("cancel", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "bye",
-      () =>  {
-        this.endCleanup();
-        if (session === this.session) delete this.session;
-        var event = Dial.buildEvent("bye", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "terminated",
-      () =>  {
-        this.endCleanup();
-        if (session === this.session) delete this.session;
-        var event = Dial.buildEvent("terminated", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "reinvite",
-      () =>  {
-        var event = Dial.buildEvent("reinvite", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "replaced",
-      () =>  {
-        var event = Dial.buildEvent("replaced", {});
-        this.sendEvent(event);
-      }
-    );
-    session.on(
-      "dtmf",
-      (request, dtmf) => {
-        var event = Dial.buildEvent("dtmf", { number: dtmf });
-        this.sendEvent(event);
-      }
-    );
+      }.bind(this));
+    }.bind(this));
     session.on('directionChanged', function () {
-      var event = Dial.buildEvent('directionChanged', {});
+      var event = Dial.buildEvent('directionChanged', {'session':session});
       this.sendEvent(event);
     }.bind(this));
     session.on('referRequested', function(context) {
-      this.setSession(context.newSession);
-      var event = Dial.buildEvent('referRequested', {});
+      this.initializeSession(context.newSession);
+      var event = Dial.buildEvent('referRequested', {'session':session});
       this.sendEvent(event);
     }.bind(this));
 
-    this.session = session;
-    this.addTrackListener();
+    this.setSession(session);
+    this.addTrackListener(session);
+  }
+
+  getDefaultSession(){
+    var oldestTime = Number.MAX_SAFE_INTEGER;
+    var defaultSession = undefined;
+    for (var sessionId in this.sessionList) {
+      if (this.sessionList.hasOwnProperty(sessionId)) {
+         if(this.sessionList[sessionId].data.timestamp < oldestTime){
+           oldestTime = this.sessionList[sessionId].data.timestamp;
+           defaultSession = this.sessionList[sessionId];
+         }
+      }
+    }
+    return defaultSession;
+  }
+
+  getMostRecentSession(){
+    var oldestTime = Number.MIN_SAFE_INTEGER;
+    var defaultSession = undefined;
+    for (var sessionId in this.sessionList) {
+      if (this.sessionList.hasOwnProperty(sessionId)) {
+         if(this.sessionList[sessionId].data.timestamp > oldestTime){
+           oldestTime = this.sessionList[sessionId].data.timestamp;
+           defaultSession = this.sessionList[sessionId];
+         }
+      }
+    }
+    return defaultSession;
+  }
+
+   /**
+   * Removes a specific session from the current session list.
+   * @param {!object} session The session object.
+   */
+  removeSession(session){
+    if(this.sessionList.hasOwnProperty(session.id)){
+      delete this.sessionList[session.id];
+    }
+  }
+
+  /**
+   * Adds a new sessionb to the session list.
+   * @param {!object} session The session object.
+   */
+  setSession(session){
+    if(session != null && session != undefined){
+      session.data.timestamp = Date.now();
+      this.sessionList[session.id] = session;
+      var event = Dial.buildEvent('outboundSessionCreated', {'session':session});
+      this.sendEvent(event);
+    }
   }
 
   /**
    * Terminates the current Session gracefully.
    */
   terminateSession() {
-    if (this.session) {
-      this.session.terminate();
+    var session = this.getDefaultSession();
+    if( session!= undefined){
+      session.terminate();
     }
   }
 
   /**
    * Sends errors as DialToneError events to client.
    * @param {!string} code Current numeric error code.
-   * @param sipCode
+   * @param {number} sipCode Numeric SIP message code.
    */
-  sendError(code, sipCode = -1) {
+  sendError(code,sipCode = -1){
     var message = this.messages[code];
-    var event = Dial.buildEvent(
-      "DialToneError",
-      { sipErrorCode: sipCode },
-      code,
-      message
-    );
+    var event = Dial.buildEvent('DialToneError', {'sipErrorCode': sipCode}, code, message);
     this.sendEvent(event);
   }
+
 }

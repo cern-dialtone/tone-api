@@ -8,6 +8,7 @@
  * universal client for all browsers and operating systems.
  *
  * @author JoÃ£o Filipe Garrett PaixÃ£o FlorÃªncio <joao.florencio@cern.ch>
+ * @adapted Rene Fernandez Sanchez <rene.fernandez@cern.ch>
  */
 
 import SHA512 from "crypto-js/sha512";
