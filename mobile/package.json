@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "watch": "nodemon -e js --watch src --exec \"rm -rf ../../mobile/node_modules/tone-api-mobile && cp -R . ../../mobile/node_modules/tone-api-mobile\""
+    "watch": "nodemon -e js --watch src --exec \"rm -rf ../../../node_modules/tone-api-mobile && cp -R . ../../../node_modules/tone-api-mobile\""
   },
   "author": "",
   "license": "ISC",
