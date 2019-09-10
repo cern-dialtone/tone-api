@@ -1,6 +1,6 @@
 /**
  * dial-api.js for DIAL-TONE.
- * @version 0.8.7
+ * @version 0.8.8
  *
  * WebRTC API for audio calls through PC for TONE infrastructure.
  * DIAL-TONE (Distributed Infrastructure Architecture Leading to TONE)
@@ -89,12 +89,12 @@ export class DialNotifier extends EventEmitter {}
  * @property {boolean} returningUser Boolean indicating if Dial is instantiated again in a short period to know if it should use the same hashed token.
  */
 export class Dial {
-  constructor(dev = false, returning = false) {
+  constructor(dev = false) {
     console.debug('Dial initialized');
     this.dialNotifier = new DialNotifier();
 
     this.devMode = dev;
-    this.returningUser = returning;
+    this.returningUser = false;
     this.discoverServer();
 
     this.sessionList = {};
@@ -122,13 +122,19 @@ export class Dial {
    * @param {!string} accessToken A string with a cern OAuth2.0 token.
    * @returns {string} Hex encoded string of the SHA512 hash of the token.
    */
-  authenticate(user, accessToken) {
+  authenticate(user, accessToken, returning = false) {
+    this.returningUser = returning;
+
     if (user && accessToken) {
       console.log('authenticate()');
       try {
         this.user = user;
         this.token = accessToken;
-        this.tokenHash = SHA512(accessToken).toString();
+        if (this.returningUser) {
+          this.tokenHash = this.token;
+        } else {
+          this.tokenHash = SHA512(accessToken).toString();
+        }
         // console.log("hashed token:" + this.tokenHash);
         this.startAgent();
         return this.tokenHash;
@@ -382,12 +388,11 @@ export class Dial {
    * These are not session events (related to a particular call/session)
    */
   addListeners() {
-    console.log('adding listeners');
     this.ua.on(
       'registered',
       function() {
         this.token = undefined;
-        const event = Dial.buildEvent('registered', {});
+        var event = Dial.buildEvent('registered', {});
         this.sendEvent(event);
         if (!this.firstRegister) {
           this.startRegister(this.tokenHash);
@@ -398,19 +403,14 @@ export class Dial {
     this.ua.on(
       'unregistered',
       function(response, cause) {
-        const event = Dial.buildEvent('unregistered', {}, cause, response);
+        var event = Dial.buildEvent('unregistered', {}, cause, response);
         this.sendEvent(event);
       }.bind(this)
     );
     this.ua.on(
       'registrationFailed',
       function(cause, response) {
-        const event = Dial.buildEvent(
-          'registrationFailed',
-          {},
-          cause,
-          response
-        );
+        var event = Dial.buildEvent('registrationFailed', {}, cause, response);
         this.sendEvent(event);
       }.bind(this)
     );
@@ -419,26 +419,21 @@ export class Dial {
       function(session) {
         this.inviteReceived = true;
         this.initializeSession(session);
-        const event = Dial.buildEvent('inviteReceived', { session });
+        var event = Dial.buildEvent('inviteReceived', { session: session });
         this.sendEvent(event);
       }.bind(this)
     );
     this.ua.on(
       'message',
       function(message) {
-        const event = Dial.buildEvent('Message received', { message });
+        var event = Dial.buildEvent('Message received', { message: message });
         this.sendEvent(event);
       }.bind(this)
     );
     this.ua.transport.on(
       'connected',
       function() {
-        let tokenVersion = this.token;
-        if (this.returningUser) {
-          this.firstRegister = true;
-          tokenVersion = this.tokenHash;
-        }
-        this.startRegister(tokenVersion);
+        this.startRegister(this.token);
       }.bind(this)
     );
     this.ua.transport.on(
@@ -447,7 +442,6 @@ export class Dial {
         this.serverFailure();
       }.bind(this)
     );
-    console.debug("Listeners added")
   }
 
   serverFailure() {
