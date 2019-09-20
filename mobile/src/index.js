@@ -12,22 +12,16 @@
  */
 import SHA512 from 'crypto-js/sha512';
 
+import 'webrtc-adapter';
 import * as SIP from 'sip.js';
+import { UA } from 'sip.js/lib/UA';
+import { Utils } from 'sip.js/lib/Utils';
+import { Exceptions } from 'sip.js/lib/Exceptions';
+import { Modifiers } from 'sip.js/lib/Web';
 
-import * as ReactSDH from 'sip.js/lib/React/SessionDescriptionHandler';
-import * as ReactSDObserver from 'sip.js/lib/React/SessionDescriptionHandlerObserver';
+import MobileSessionDescriptionHandler from './MobileSDH';
 
-const reactFactory = (session, options) => {
-  const logger = session.ua.getLogger(
-    'sip.invitecontext.sessionDescriptionHandler',
-    session.id
-  );
-  const observer = new ReactSDObserver.SessionDescriptionHandlerObserver(
-    session,
-    options
-  );
-  return new ReactSDH.SessionDescriptionHandler(logger, observer, options);
-};
+const SIPMethods = { Web: { Modifiers }, Utils, Exceptions };
 
 var initialServerList = [
   {
@@ -92,6 +86,7 @@ export class Dial {
   constructor(dev = false) {
     console.debug('Dial initialized');
     this.dialNotifier = new DialNotifier();
+    this.dialNotifier.setMaxListeners(1);
 
     this.devMode = dev;
     this.returningUser = false;
@@ -359,10 +354,7 @@ export class Dial {
           video: false
         }
       },
-      sessionDescriptionHandlerFactory(session, options) {
-        const result = reactFactory(session, options);
-        return result;
-      },
+      sessionDescriptionHandlerFactory: MobileSessionDescriptionHandler(SIPMethods).defaultFactory,
       contactName: this.user,
       authorizationUser: this.user,
       password: '',
@@ -382,6 +374,7 @@ export class Dial {
     // this.ua = new SIP_main.UA(this.config);
     this.addListeners();
   }
+
 
   /**
    * Adds listener handler behaviour for user-agent events.
@@ -729,3 +722,21 @@ export class Dial {
     this.sendEvent(event);
   }
 }
+
+export const DialSingleton = (function () {
+  var instance;
+
+  function createInstance() {
+      var object = new Dial(false);
+      return object;
+  }
+
+  return {
+      getInstance: function () {
+          if (!instance) {
+              instance = createInstance();
+          }
+          return instance;
+      }
+  };
+})();
