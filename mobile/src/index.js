@@ -14,14 +14,6 @@ import SHA512 from 'crypto-js/sha512';
 
 import 'webrtc-adapter';
 import * as SIP from 'sip.js';
-import { UA } from 'sip.js/lib/UA';
-import { Utils } from 'sip.js/lib/Utils';
-import { Exceptions } from 'sip.js/lib/Exceptions';
-import { Modifiers } from 'sip.js/lib/Web';
-
-import MobileSessionDescriptionHandler from './MobileSDH';
-
-const SIPMethods = { Web: { Modifiers }, Utils, Exceptions };
 
 var initialServerList = [
   {
@@ -354,7 +346,7 @@ export class Dial {
           video: false
         }
       },
-      sessionDescriptionHandlerFactory: MobileSessionDescriptionHandler(SIPMethods).defaultFactory,
+      // sessionDescriptionHandlerFactory: MobileSessionDescriptionHandler(SIPMethods).defaultFactory,
       contactName: this.user,
       authorizationUser: this.user,
       password: '',
