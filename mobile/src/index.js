@@ -1,6 +1,6 @@
 /**
  * dial-api.js for DIAL-TONE.
- * @version 0.8.8
+ * @version 0.8.9
  *
  * WebRTC API for audio calls through PC for TONE infrastructure.
  * DIAL-TONE (Distributed Infrastructure Architecture Leading to TONE)
@@ -242,7 +242,7 @@ export class Dial {
    */
   sendDTMF(tone) {
     if (this.onCall) {
-      this.getDefaultSession.dtmf(tone);
+      this.getDefaultSession().dtmf(tone);
     } else throw Error('Trying to send DTMF digits when not on a call.');
   }
 
