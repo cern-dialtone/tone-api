@@ -12,7 +12,6 @@
  */
 import SHA512 from 'crypto-js/sha512';
 
-import 'webrtc-adapter';
 import * as SIP from 'sip.js';
 
 var initialServerList = [
@@ -211,7 +210,7 @@ export class Dial {
    * @param {!object} session Session object.
    */
   hangUpCall(session) {
-    if (session && session != undefined) {
+    if (session && session !== undefined) {
       if (this.sessionOnCall(session) || this.onCall) {
         session.terminate();
         delete this.sessionList[session.id];
@@ -346,7 +345,6 @@ export class Dial {
           video: false
         }
       },
-      // sessionDescriptionHandlerFactory: MobileSessionDescriptionHandler(SIPMethods).defaultFactory,
       contactName: this.user,
       authorizationUser: this.user,
       password: '',
@@ -359,25 +357,22 @@ export class Dial {
       hackIpInContact: false,
       userAgentString: 'sip.js-v0.13.8 IT-CS-TR'
     };
-    console.log(this.config);
     // @ts-ignore
     this.ua = new SIP.UA(this.config);
-    console.log(this.ua);
-    // this.ua = new SIP_main.UA(this.config);
     this.addListeners();
   }
-
 
   /**
    * Adds listener handler behaviour for user-agent events.
    * These are not session events (related to a particular call/session)
    */
   addListeners() {
+    let event;
     this.ua.on(
       'registered',
       function() {
         this.token = undefined;
-        var event = Dial.buildEvent('registered', {});
+        event = Dial.buildEvent('registered', {});
         this.sendEvent(event);
         if (!this.firstRegister) {
           this.startRegister(this.tokenHash);
@@ -388,14 +383,14 @@ export class Dial {
     this.ua.on(
       'unregistered',
       function(response, cause) {
-        var event = Dial.buildEvent('unregistered', {}, cause, response);
+        event = Dial.buildEvent('unregistered', {}, cause, response);
         this.sendEvent(event);
       }.bind(this)
     );
     this.ua.on(
       'registrationFailed',
       function(cause, response) {
-        var event = Dial.buildEvent('registrationFailed', {}, cause, response);
+        event = Dial.buildEvent('registrationFailed', {}, cause, response);
         this.sendEvent(event);
       }.bind(this)
     );
@@ -404,14 +399,14 @@ export class Dial {
       function(session) {
         this.inviteReceived = true;
         this.initializeSession(session);
-        var event = Dial.buildEvent('inviteReceived', { session: session });
+        event = Dial.buildEvent('inviteReceived', { session: session });
         this.sendEvent(event);
       }.bind(this)
     );
     this.ua.on(
       'message',
       function(message) {
-        var event = Dial.buildEvent('Message received', { message: message });
+        event = Dial.buildEvent('Message received', { message: message });
         this.sendEvent(event);
       }.bind(this)
     );
@@ -419,6 +414,15 @@ export class Dial {
       'connected',
       function() {
         this.startRegister(this.token);
+      }.bind(this)
+    );
+    this.ua.transport.on(
+      'disconnected',
+      function() {
+        event = Dial.buildEvent('disconnected', {
+          message: 'Websocket has been disconnected'
+        });
+        this.sendEvent(event);
       }.bind(this)
     );
     this.ua.transport.on(
@@ -430,9 +434,10 @@ export class Dial {
   }
 
   serverFailure() {
-    throw Error(
-      `Connection to server ${this.ua.transport.server.wsUri} failed.`
-    );
+    const event = Dial.buildEvent('error', {
+      message: `Connection to server ${this.ua.transport.server.wsUri} failed.`
+    });
+    this.sendEvent(event);
   }
 
   /**
@@ -678,7 +683,7 @@ export class Dial {
    * @param {!object} session The session object.
    */
   setSession(session) {
-    if (session != null && session != undefined) {
+    if (session != null && session !== undefined) {
       session.data.timestamp = Date.now();
       this.sessionList[session.id] = session;
       const event = Dial.buildEvent('outboundSessionCreated', {
@@ -693,7 +698,7 @@ export class Dial {
    */
   terminateSession() {
     const session = this.getDefaultSession();
-    if (session != undefined) {
+    if (session !== undefined) {
       session.terminate();
     }
   }
@@ -715,20 +720,20 @@ export class Dial {
   }
 }
 
-export const DialSingleton = (function () {
+export const DialSingleton = (function() {
   var instance;
 
   function createInstance() {
-      var object = new Dial(false);
-      return object;
+    var object = new Dial(false);
+    return object;
   }
 
   return {
-      getInstance: function () {
-          if (!instance) {
-              instance = createInstance();
-          }
-          return instance;
+    getInstance: function() {
+      if (!instance) {
+        instance = createInstance();
       }
+      return instance;
+    }
   };
 })();
