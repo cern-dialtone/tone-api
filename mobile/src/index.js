@@ -723,15 +723,15 @@ export class Dial {
 export const DialSingleton = (function() {
   var instance;
 
-  function createInstance() {
-    var object = new Dial(false);
+  function createInstance(isDev) {
+    var object = new Dial(isDev);
     return object;
   }
 
   return {
-    getInstance: function() {
+    getInstance: function(isDev) {
       if (!instance) {
-        instance = createInstance();
+        instance = createInstance(isDev);
       }
       return instance;
     }
