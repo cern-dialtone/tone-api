@@ -10,9 +10,24 @@
  * @author JoÃ£o Filipe Garrett PaixÃ£o FlorÃªncio <joao.florencio@cern.ch>
  * @adapted Rene Fernandez Sanchez <rene.fernandez@cern.ch>
  */
+import 'webrtc-adapter';
 import SHA512 from 'crypto-js/sha512';
 
 import * as SIP from 'sip.js';
+
+import { SessionDescriptionHandler } from 'sip.js/lib/React';
+
+function once(func) {
+  let ran = false;
+  let memo;
+  return function() {
+    if (ran) return memo;
+    ran = true;
+    memo = func && func.apply(this, arguments);
+    func = null;
+    return memo;
+  };
+}
 
 var initialServerList = [
   {
@@ -332,6 +347,7 @@ export class Dial {
    * the function initializes the UserAgent event triggers.
    */
   startAgent() {
+    console.log('Staring agent');
     this.config = {
       uri: `${this.user}@${this.uri}`,
       allowLegacyNotifications: true,
@@ -345,6 +361,8 @@ export class Dial {
           video: false
         }
       },
+      sessionDescriptionHandlerFactory:
+        SessionDescriptionHandler.defaultFactory,
       contactName: this.user,
       authorizationUser: this.user,
       password: '',
@@ -599,6 +617,7 @@ export class Dial {
         this.sendEvent(event);
       }.bind(this)
     );
+
     session.on(
       'SessionDescriptionHandler-created',
       function() {
